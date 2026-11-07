@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS score_events;
+DROP TABLE IF EXISTS teams;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS users;

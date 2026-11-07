@@ -1,0 +1,23 @@
+# Secrets
+.env
+.env.*
+
+# SQLite databases (dev + load test)
+*.db
+*.db-shm
+*.db-wal
+
+# Go build / test output
+*.exe
+*.test
+*.out
+/game_service/api
+/game_service/bin/
+
+# k6 results
+/loadtests/results/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
