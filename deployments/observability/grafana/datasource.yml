@@ -7,4 +7,5 @@ datasources:
     isDefault: true
   - name: Jaeger
     type: jaeger
+    uid: jaeger
     url: http://jaeger:16686

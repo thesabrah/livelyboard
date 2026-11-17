@@ -477,6 +477,59 @@
     }
    ],
    "options": {}
+  },
+  {
+   "id": 14,
+   "type": "table",
+   "title": "Latest traces ($route)",
+   "description": "Newest 20 traces from Jaeger, re-run on every refresh. Click a trace ID to open it.",
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 24,
+    "h": 10
+   },
+   "datasource": {
+    "type": "jaeger",
+    "uid": "jaeger"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "jaeger",
+      "uid": "jaeger"
+     },
+     "queryType": "search",
+     "service": "livelyboard",
+     "operation": "$route",
+     "limit": 20
+    }
+   ],
+   "options": {
+    "sortBy": [
+     {
+      "displayName": "Start time",
+      "desc": true
+     }
+    ]
+   }
   }
- ]
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "route",
+    "label": "Route",
+    "type": "custom",
+    "query": "POST /teams/{id}/score,GET /teams/{id}/rank,GET /leaderboard,POST /teams",
+    "includeAll": true,
+    "allValue": "All",
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    }
+   }
+  ]
+ }
 }

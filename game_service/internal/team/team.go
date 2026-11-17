@@ -8,6 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"livelyboard/internal/db"
 )
@@ -29,6 +34,25 @@ var ErrNotFound = errors.New("team not found")
 
 type Store struct{ db *db.DB }
 
+// No-op until telemetry.Setup installs a provider.
+var tracer = otel.Tracer("livelyboard/team")
+
+// endSpan records err, if any, and ends the span.
+func endSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+}
+
+// startQuery starts a span for one SQL statement (placeholders only, never values).
+func startQuery(ctx context.Context, name, query string, attrs ...attribute.KeyValue) trace.Span {
+	attrs = append(attrs, semconv.DBSystemNameSQLite, semconv.DBQueryText(query))
+	_, span := tracer.Start(ctx, name, trace.WithAttributes(attrs...))
+	return span
+}
+
 // New expects the schema from migrations/ (applied by db.Open).
 func New(conn *db.DB) (*Store, error) {
 	return &Store{db: conn}, nil
@@ -45,41 +69,68 @@ func (s *Store) Create(ctx context.Context, ownerID, name string, score int) (Te
 	return t, err
 }
 
+const (
+	insertEventQuery = `INSERT INTO score_events (event_id, team_id, delta) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
+	updateTeamQuery  = `UPDATE teams SET score = score + ? WHERE id = ? AND owner_id = ? RETURNING id, owner_id, name, score`
+	selectTeamQuery  = `SELECT id, owner_id, name, score FROM teams WHERE id = ? AND owner_id = ?`
+)
+
 // AddScore adds delta to a team owned by ownerID, once per eventID; a repeated eventID is a no-op
 // that returns the current team, so client retries are safe. A team owned by someone else is ErrNotFound.
-	func (s *Store) AddScore(ctx context.Context, ownerID, teamID, eventID string, delta int) (Team, error) {
-		tx, err := s.db.Write.BeginTx(ctx, nil)
-		if err != nil {
-			return Team{}, err
-		}
-		defer tx.Rollback()
-
-		res, err := tx.ExecContext(ctx,
-			`INSERT INTO score_events (event_id, team_id, delta) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
-			eventID, teamID, delta)
-		if err != nil {
-			return Team{}, err
-		}
-		inserted, err := res.RowsAffected()
-		if err != nil {
-			return Team{}, err
-		}
-
-		row := tx.QueryRowContext(ctx, `SELECT id, owner_id, name, score FROM teams WHERE id = ? AND owner_id = ?`,
-			teamID, ownerID)
-		if inserted == 1 {
-			row = tx.QueryRowContext(ctx,
-				`UPDATE teams SET score = score + ? WHERE id = ? AND owner_id = ? RETURNING id, owner_id, name, score`,
-				delta, teamID, ownerID)
-		}
-		var t Team
-		if err := row.Scan(&t.ID, &t.OwnerID, &t.Name, &t.Score); errors.Is(err, sql.ErrNoRows) {
-			return Team{}, ErrNotFound // rollback also drops the event row
-		} else if err != nil {
-			return Team{}, err
-		}
-		return t, tx.Commit()
+func (s *Store) AddScore(ctx context.Context, ownerID, teamID, eventID string, delta int) (Team, error) {
+	// One span per step; pool wait and SQLite lock wait (BEGIN) are split to tell them apart.
+	_, span := tracer.Start(ctx, "db.wait_connection")
+	conn, err := s.db.Write.Conn(ctx)
+	endSpan(span, err)
+	if err != nil {
+		return Team{}, err
 	}
+	defer conn.Close() // runs after tx.Rollback
+
+	span = startQuery(ctx, "db.begin", "BEGIN IMMEDIATE") // _txlock=immediate
+	tx, err := conn.BeginTx(ctx, nil)
+	endSpan(span, err)
+	if err != nil {
+		return Team{}, err
+	}
+	defer tx.Rollback()
+
+	span = startQuery(ctx, "db.insert_event", insertEventQuery)
+	var inserted int64
+	res, err := tx.ExecContext(ctx, insertEventQuery, eventID, teamID, delta)
+	if err == nil {
+		inserted, err = res.RowsAffected()
+	}
+	endSpan(span, err)
+	if err != nil {
+		return Team{}, err
+	}
+
+	// QueryRowContext runs the query immediately, so pick exactly one.
+	var row *sql.Row
+	if inserted == 1 {
+		span = startQuery(ctx, "db.update_team", updateTeamQuery)
+		row = tx.QueryRowContext(ctx, updateTeamQuery, delta, teamID, ownerID)
+	} else {
+		span = startQuery(ctx, "db.select_team", selectTeamQuery) // repeated event_id
+		row = tx.QueryRowContext(ctx, selectTeamQuery, teamID, ownerID)
+	}
+	var t Team
+	err = row.Scan(&t.ID, &t.OwnerID, &t.Name, &t.Score)
+	if errors.Is(err, sql.ErrNoRows) {
+		endSpan(span, nil)         // not found isn't a failure
+		return Team{}, ErrNotFound // rollback also drops the event row
+	}
+	endSpan(span, err)
+	if err != nil {
+		return Team{}, err
+	}
+
+	span = startQuery(ctx, "db.commit", "COMMIT")
+	err = tx.Commit()
+	endSpan(span, err)
+	return t, err
+}
 
 // Ranked is a team's public leaderboard entry. Ties share a rank (50, 40, 40, 30 -> 1, 2, 2, 4).
 type Ranked struct {
@@ -101,40 +152,47 @@ const neighbors = 2
 // rank = 1 + teams with a higher score. Walks the score index, so cost grows with the rank: O(rank).
 const rankedSelect = `SELECT id, name, score, (SELECT COUNT(*) FROM teams t2 WHERE t2.score > t.score) + 1 FROM teams t `
 
+// shortcut: COUNT(*) per request is O(n); keep a counter or move to Redis ZCARD when teams grow.
+const rankQuery = `SELECT id, name, score,
+	(SELECT COUNT(*) FROM teams t2 WHERE t2.score > t.score) + 1,
+	(SELECT COUNT(*) FROM teams)
+	FROM teams t WHERE id = ?`
+
 // Rank returns a team's rank, the total team count and its nearest neighbors.
 // Neighbors use the total order (score DESC, id DESC); the order inside a tie is arbitrary.
 // The queries are not in one transaction (reads use the read pool, without a snapshot tx), so a
 // concurrent score update can make neighbor ranks momentarily inconsistent.
 func (s *Store) Rank(ctx context.Context, id string) (Standing, error) {
 	var st Standing
-	// shortcut: COUNT(*) per request is O(n); keep a counter or move to Redis ZCARD when teams grow.
-	err := s.db.Read.QueryRowContext(ctx, `SELECT id, name, score,
-		(SELECT COUNT(*) FROM teams t2 WHERE t2.score > t.score) + 1,
-		(SELECT COUNT(*) FROM teams)
-		FROM teams t WHERE id = ?`, id).Scan(&st.ID, &st.Name, &st.Score, &st.Rank, &st.TotalTeams)
+	span := startQuery(ctx, "db.query_rank", rankQuery)
+	err := s.db.Read.QueryRowContext(ctx, rankQuery, id).Scan(&st.ID, &st.Name, &st.Score, &st.Rank, &st.TotalTeams)
 	if errors.Is(err, sql.ErrNoRows) {
+		endSpan(span, nil) // not found isn't a failure
 		return Standing{}, ErrNotFound
 	}
+	endSpan(span, err)
 	if err != nil {
 		return Standing{}, err
 	}
-	if st.Above, err = s.ranked(ctx, `WHERE (score, id) > (?, ?) ORDER BY score, id LIMIT ?`, st.Score, st.ID); err != nil {
+	if st.Above, err = s.ranked(ctx, "above", `WHERE (score, id) > (?, ?) ORDER BY score, id LIMIT ?`, st.Score, st.ID); err != nil {
 		return Standing{}, err
 	}
 	slices.Reverse(st.Above) // fetched closest-first; return best first
-	if st.Below, err = s.ranked(ctx, `WHERE (score, id) < (?, ?) ORDER BY score DESC, id DESC LIMIT ?`, st.Score, st.ID); err != nil {
+	if st.Below, err = s.ranked(ctx, "below", `WHERE (score, id) < (?, ?) ORDER BY score DESC, id DESC LIMIT ?`, st.Score, st.ID); err != nil {
 		return Standing{}, err
 	}
 	return st, nil
 }
 
-func (s *Store) ranked(ctx context.Context, where string, score int, id string) ([]Ranked, error) {
+func (s *Store) ranked(ctx context.Context, direction, where string, score int, id string) (out []Ranked, err error) {
+	span := startQuery(ctx, "db.query_neighbors", rankedSelect+where, attribute.String("direction", direction))
+	defer func() { endSpan(span, err) }()
 	rows, err := s.db.Read.QueryContext(ctx, rankedSelect+where, score, id, neighbors)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Ranked{} // non-nil so JSON is [] rather than null
+	out = []Ranked{} // non-nil so JSON is [] rather than null
 	for rows.Next() {
 		var r Ranked
 		if err := rows.Scan(&r.ID, &r.Name, &r.Score, &r.Rank); err != nil {
@@ -159,13 +217,15 @@ const topN = 10
 const topQuery = `SELECT name, score FROM teams ORDER BY score DESC, id DESC LIMIT ?`
 
 // Top returns the best topN teams, best first.
-func (s *Store) Top(ctx context.Context) ([]Leader, error) {
+func (s *Store) Top(ctx context.Context) (out []Leader, err error) {
+	span := startQuery(ctx, "db.query_leaderboard", topQuery)
+	defer func() { endSpan(span, err) }()
 	rows, err := s.db.Read.QueryContext(ctx, topQuery, topN)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Leader{} // non-nil so JSON is [] rather than null
+	out = []Leader{} // non-nil so JSON is [] rather than null
 	for rows.Next() {
 		l := Leader{Rank: len(out) + 1}
 		if err := rows.Scan(&l.Name, &l.Score); err != nil {
