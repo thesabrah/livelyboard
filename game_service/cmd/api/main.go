@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"io/fs"
 	"log"
@@ -16,8 +17,10 @@ import (
 	"livelyboard/internal/auth"
 	"livelyboard/internal/db"
 	"livelyboard/internal/team"
+	"livelyboard/internal/telemetry"
 
 	"github.com/joho/godotenv"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const shutdownTimeout = 10 * time.Second // fits inside Kubernetes' default 30s grace period
@@ -47,6 +50,12 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return err
 	}
 	defer conn.Close() // runs last: after HTTP has drained and cleanup has stopped
+	// Opt-in: set OTEL_EXPORTER_OTLP_ENDPOINT (host:port of the Collector) to export metrics + traces.
+	stopTelemetry, err := telemetry.Setup(ctx, getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		map[string]*sql.DB{"write": conn.Write, "read": conn.Read})
+	if err != nil {
+		return err
+	}
 	teams, err := team.New(conn)
 	if err != nil {
 		return err
@@ -75,7 +84,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		})
 	})
 
-	srv := &http.Server{Addr: ":" + port, Handler: mux,ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: ":" + port, Handler: otelhttp.NewHandler(mux, "http"), ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
 		log.Println("Listening on port", port)
@@ -93,6 +102,9 @@ func run(ctx context.Context, getenv func(string) string) error {
 	}
 	stop() // also cancels ctx on the startup-failure path, so cleanup exits
 	wg.Wait()
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancelFlush()
+	err = errors.Join(err, stopTelemetry(flushCtx)) // after HTTP drained, so the last requests are exported
 	log.Println("Stopped")
 	return err
 }

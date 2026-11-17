@@ -1,0 +1,535 @@
+{
+ "uid": "livelyboard",
+ "title": "Livelyboard API",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "5s",
+ "time": {
+  "from": "now-15m",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Requests / s",
+   "description": "Total request throughput. In the k6 closed model this should track the VU count.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(http_server_request_duration_seconds_count[$__rate_interval]))",
+     "legendFormat": "req/s",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Error rate (5xx)",
+   "description": "Share of requests answered with a server error. k6 threshold is < 1%.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count[$__rate_interval]))",
+     "legendFormat": "5xx",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "p99 latency",
+   "description": "k6 threshold: p99 < 1s.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+     "legendFormat": "p99",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "In-flight requests",
+   "description": "Requests being handled right now. Grows when the server can't keep up.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 0,
+    "w": 6,
+    "h": 4
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum(http_server_active_requests)",
+     "legendFormat": "active",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Request rate by route",
+   "description": "Which endpoints take the traffic. Label is the mux pattern, not the raw path.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count[$__rate_interval]))",
+     "legendFormat": "{{http_route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Responses by status code",
+   "description": "Spot 4xx (bad input, duplicate/expired event_id, 404) vs 5xx.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 4,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count[$__rate_interval]))",
+     "legendFormat": "{{http_response_status_code}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Latency p50 / p95 / p99 (all routes)",
+   "description": "Percentiles estimated from histogram buckets, so accuracy is limited by bucket edges.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+     "legendFormat": "p50",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+     "legendFormat": "p95",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "refId": "C",
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+     "legendFormat": "p99",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "p99 latency by route",
+   "description": "Which endpoint breaks the p99 threshold first (expect POST /teams/{id}/score: it queues on the single writer).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 12,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "histogram_quantile(0.99, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+     "legendFormat": "{{http_route}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "DB pool connections in use",
+   "description": "write has max 1 connection. in_use pinned at 1 = the writer is saturated.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 20,
+    "w": 8,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "db_pool_in_use",
+     "legendFormat": "{{pool}} in use",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    },
+    {
+     "refId": "B",
+     "expr": "db_pool_open",
+     "legendFormat": "{{pool}} open",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "DB waits / s",
+   "description": "Calls that had to queue for a connection. Non-zero on write is the single-writer ceiling.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 20,
+    "w": 8,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (pool) (rate(db_pool_wait_count_total[$__rate_interval]))",
+     "legendFormat": "{{pool}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Avg callers waiting for a DB connection",
+   "description": "Seconds spent waiting per second = average queue length. 0.5 means half a request is always queued.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 20,
+    "w": 8,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (pool) (rate(db_pool_wait_duration_seconds_total[$__rate_interval]))",
+     "legendFormat": "{{pool}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 12,
+   "type": "timeseries",
+   "title": "Goroutines",
+   "description": "Climbing without bound under steady load suggests a leak or a stuck dependency.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "go_goroutine_count",
+     "legendFormat": "goroutines",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "Go memory used",
+   "description": "Stack vs other; sawtooth is normal GC.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 28,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes"
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "expr": "sum by (go_memory_type) (go_memory_used_bytes)",
+     "legendFormat": "{{go_memory_type}}",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     }
+    }
+   ],
+   "options": {}
+  },
+  {
+   "id": 14,
+   "type": "table",
+   "title": "Latest traces ($route)",
+   "description": "Newest 20 traces from Jaeger, re-run on every refresh. Click a trace ID to open it.",
+   "gridPos": {
+    "x": 0,
+    "y": 36,
+    "w": 24,
+    "h": 10
+   },
+   "datasource": {
+    "type": "jaeger",
+    "uid": "jaeger"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "jaeger",
+      "uid": "jaeger"
+     },
+     "queryType": "search",
+     "service": "livelyboard",
+     "operation": "$route",
+     "limit": 20
+    }
+   ],
+   "options": {
+    "sortBy": [
+     {
+      "displayName": "Start time",
+      "desc": true
+     }
+    ]
+   }
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "route",
+    "label": "Route",
+    "type": "custom",
+    "query": "POST /teams/{id}/score,GET /teams/{id}/rank,GET /leaderboard,POST /teams",
+    "includeAll": true,
+    "allValue": "All",
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    }
+   }
+  ]
+ }
+}
